@@ -41,6 +41,7 @@ type BarbicanDefaults struct {
 	APIContainerImageURL              string
 	WorkerContainerImageURL           string
 	KeystoneListenerContainerImageURL string
+	BarbicanAPITimeout                int
 }
 
 var barbicanDefaults BarbicanDefaults
@@ -96,6 +97,9 @@ func (spec *BarbicanSpecBase) Default() {
 // Default - set defaults for this BarbicanSpecBase. NOTE: this version is used by the OpenStackControlplane webhook
 func (spec *BarbicanSpecCore) Default() {
 	// no validations
+	if spec.APITimeout == 0 {
+		spec.APITimeout = barbicanDefaults.BarbicanAPITimeout
+	}
 	spec.BarbicanSpecBase.Default()
 }
 
@@ -202,4 +206,34 @@ func (r *Barbican) ValidateDelete() (admission.Warnings, error) {
 
 	// TODO(user): fill in your validation logic upon object deletion.
 	return nil, nil
+}
+
+func (spec *BarbicanSpecCore) GetDefaultRouteAnnotations() (annotations map[string]string) {
+	return map[string]string{
+		"haproxy.router.openshift.io/timeout": fmt.Sprintf("%ds", barbicanDefaults.BarbicanAPITimeout),
+	}
+}
+
+// SetDefaultRouteAnnotations sets HAProxy timeout values for Barbican API routes
+func (spec *BarbicanAPITemplateCore) SetDefaultRouteAnnotations(annotations map[string]string) {
+	const haProxyAnno = "haproxy.router.openshift.io/timeout"
+	// Use a custom annotation to flag when the operator has set the default HAProxy timeout
+	// With the annotation func determines when to overwrite existing HAProxy timeout with the APITimeout
+	const barbicanAnno = "api.Barbican.openstack.org/timeout"
+	valBarbicanAPI, okBarbicanAPI := annotations[barbicanAnno]
+	valHAProxy, okHAProxy := annotations[haProxyAnno]
+
+	// Human operator set the HAProxy timeout manually
+	if !okBarbicanAPI && okHAProxy {
+		return
+	}
+	// Human operator modified the HAProxy timeout manually without removing the Barbican flag
+	if okBarbicanAPI && okHAProxy && valBarbicanAPI != valHAProxy {
+		delete(annotations, barbicanAnno)
+		return
+	}
+
+	timeout := fmt.Sprintf("%ds", spec.APITimeout)
+	annotations[barbicanAnno] = timeout
+	annotations[haProxyAnno] = timeout
 }

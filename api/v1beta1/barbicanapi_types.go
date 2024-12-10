@@ -38,6 +38,10 @@ type BarbicanAPITemplateCore struct {
 	BarbicanComponentTemplate `json:",inline"`
 
 	// +kubebuilder:validation:Optional
+	// APITimeout for HAProxy, Apache
+	APITimeout int `json:"apiTimeout"`
+
+	// +kubebuilder:validation:Optional
 	// +kubebuilder:default=true
 	// EnableSecureRBAC - Enable Consistent and Secure RBAC policies
 	EnableSecureRBAC bool `json:"enableSecureRBAC"`

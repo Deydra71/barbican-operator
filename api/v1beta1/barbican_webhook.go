@@ -85,6 +85,10 @@ func (spec *BarbicanSpec) Default() {
 	if spec.BarbicanKeystoneListener.ContainerImage == "" {
 		spec.BarbicanKeystoneListener.ContainerImage = barbicanDefaults.KeystoneListenerContainerImageURL
 	}
+
+	if spec.BarbicanAPI.APITimeout == 0 {
+		spec.BarbicanAPI.APITimeout = 90
+	}
 	spec.BarbicanSpecBase.Default()
 }
 
@@ -202,4 +206,27 @@ func (r *Barbican) ValidateDelete() (admission.Warnings, error) {
 
 	// TODO(user): fill in your validation logic upon object deletion.
 	return nil, nil
+}
+
+// SetDefaultRouteAnnotations sets HAProxy timeout values for Barbican API routes
+func (spec *BarbicanAPITemplateCore) SetDefaultRouteAnnotations(annotations map[string]string) {
+	const haProxyAnno = "haproxy.router.openshift.io/timeout"
+	// Use a custom annotation to flag when the operator has set the default HAProxy timeout
+	const barbicanAnno = "api.Barbican.openstack.org/timeout"
+	valBarbicanAPI, okBarbicanAPI := annotations[barbicanAnno]
+	valHAProxy, okHAProxy := annotations[haProxyAnno]
+
+	// Human operator set the HAProxy timeout manually
+	if !okBarbicanAPI && okHAProxy {
+		return
+	}
+	// Human operator modified the HAProxy timeout manually without removing the Barbican flag
+	if okBarbicanAPI && okHAProxy && valBarbicanAPI != valHAProxy {
+		delete(annotations, barbicanAnno)
+		return
+	}
+
+	timeout := fmt.Sprintf("%ds", spec.APITimeout)
+	annotations[barbicanAnno] = timeout
+	annotations[haProxyAnno] = timeout
 }

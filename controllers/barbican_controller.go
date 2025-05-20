@@ -664,21 +664,28 @@ func (r *BarbicanReconciler) generateServiceConfig(
 	}
 
 	templateParameters["UseApplicationCredentials"] = false
-	// fetch AC CR
+	// Fetch AC CR
 	ac := &keystonev1.ApplicationCredential{}
 	acName := types.NamespacedName{Namespace: instance.Namespace, Name: fmt.Sprintf("ac-%s", barbican.ServiceName)}
+	// Look up the AC
 	if err := r.Client.Get(ctx, acName, ac); err == nil {
-		// fetch AC Secret
+		// Look up the AC secret
 		secret := &corev1.Secret{}
 		secName := types.NamespacedName{Namespace: ac.Namespace, Name: ac.Status.SecretName}
-		if err := r.Client.Get(ctx, secName, secret); err == nil {
-			// switch to application credentials auth
-			templateParameters["UseApplicationCredentials"] = true
-			templateParameters["ACID"] = string(secret.Data["AC_ID"])
-			templateParameters["ACSecret"] = string(secret.Data["AC_SECRET"])
-			Log.Info("Using ApplicationCredentials auth")
+		if err := r.Client.Get(ctx, secName, secret); err != nil {
+			if k8s_errors.IsNotFound(err) {
+				return fmt.Errorf("ApplicationCredential Secret not found, %s", secName)
+			}
+			Log.Error(err, "Failed to fetch ApplicationCredential Secret", "secret", secName)
+			return err
 		}
+
+		templateParameters["UseApplicationCredentials"] = true
+		templateParameters["ACID"] = string(secret.Data["AC_ID"])
+		templateParameters["ACSecret"] = string(secret.Data["AC_SECRET"])
+		Log.Info("Using ApplicationCredentials auth", "AC", secret.Name)
 	} else if !k8s_errors.IsNotFound(err) {
+		Log.Error(err, "Failed to fetch ApplicationCredential CR", "ac", acName)
 		return err
 	}
 

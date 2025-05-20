@@ -1,5 +1,5 @@
-github.com/Deydra71/keystone-operator/api v0.0.0-20250428100042-040976c94314 h1:8BROw/Rye41WXwj9Bs0P0V1aUaVAMm++R+8Rla+v+WI=
-github.com/Deydra71/keystone-operator/api v0.0.0-20250428100042-040976c94314/go.mod h1:VPkYswnrCtlSMTeYjgxTOpfNN7zvxqa+kZ8EWDJaFrg=
+github.com/Deydra71/keystone-operator/api v0.0.0-20250519123217-49620096eb19 h1:P93G634OZTX/Fr6g27G0zZioRCxqLxgKEz9xV5NAALI=
+github.com/Deydra71/keystone-operator/api v0.0.0-20250519123217-49620096eb19/go.mod h1:VPkYswnrCtlSMTeYjgxTOpfNN7zvxqa+kZ8EWDJaFrg=
 github.com/beorn7/perks v1.0.1 h1:VlbKKnNfV8bJzeqoa4cOKqO6bYr3WgKZxO8Z16+hsOM=
 github.com/beorn7/perks v1.0.1/go.mod h1:G2ZrVWU2WbWT9wwq4/hrbKbnv/1ERSJQ0ibhJ6rlkpw=
 github.com/cespare/xxhash/v2 v2.2.0 h1:DC2CZ1Ep5Y4k3ZQ899DldepgrayRUGE6BBZ/cd9Cj44=

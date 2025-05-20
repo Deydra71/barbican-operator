@@ -615,31 +615,24 @@ func (r *BarbicanAPIReconciler) reconcileNormal(ctx context.Context, instance *b
 	// check for  ApplicationCredential
 	acName := fmt.Sprintf("ac-%s", barbican.ServiceName)
 	ac := &keystonev1.ApplicationCredential{}
-	err = r.Client.Get(ctx, types.NamespacedName{Namespace: instance.Namespace, Name: acName}, ac)
-	if k8s_errors.IsNotFound(err) {
-		Log.Info("No ApplicationCredential CR found, using password auth", "ac", acName)
-	} else if err != nil {
+	if err := r.Client.Get(ctx, client.ObjectKey{Namespace: instance.Namespace, Name: acName}, ac); err == nil {
+		if res, err := r.verifyServiceCredentials(ctx, helper, instance.Namespace, ac.Status.SecretName, &configVars); err != nil || res.RequeueAfter > 0 {
+			return res, err
+		}
+	} else if !k8s_errors.IsNotFound(err) {
 		return ctrl.Result{}, err
 	} else {
-		secretName := ac.Status.SecretName
-		if secretName == "" {
-			Log.Info("ApplicationCredential created but Secret not yet ready, requeueing", "ac", acName)
-			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
-		}
-		hashAC, res, err := secret.VerifySecret(
+		// no ApplicationCredential CR, fall back to password auth
+		if res, err := r.verifySecret(
 			ctx,
-			types.NamespacedName{Name: secretName, Namespace: instance.Namespace},
-			[]string{"AC_ID", "AC_SECRET"},
-			helper.GetClient(),
-			10*time.Second,
-		)
-		if err != nil {
-			return ctrl.Result{}, err
+			helper,
+			instance,
+			instance.Spec.Secret,
+			[]string{instance.Spec.PasswordSelectors.Service},
+			&configVars,
+		); err != nil || res.RequeueAfter > 0 {
+			return res, err
 		}
-		if res.RequeueAfter > 0 {
-			return res, nil
-		}
-		configVars["secret-"+secretName] = env.SetValue(hashAC)
 	}
 
 	//
@@ -1066,4 +1059,50 @@ func (r *BarbicanAPIReconciler) findObjectsForSrc(ctx context.Context, src clien
 	}
 
 	return requests
+}
+
+// verifyServiceCredentials checks for the AC Secret, requeues if not ready,
+// and puts the hash into configVars
+func (r *BarbicanAPIReconciler) verifyServiceCredentials(
+	ctx context.Context,
+	helper *helper.Helper,
+	namespace string,
+	secretName string,
+	configVars *map[string]env.Setter,
+) (ctrl.Result, error) {
+	log := r.GetLogger(ctx)
+
+	if secretName == "" {
+		log.Info("AC SecretName not populated yet, requeueing")
+		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+	}
+
+	sec := &corev1.Secret{}
+	key := types.NamespacedName{Namespace: namespace, Name: secretName}
+	if err := r.Client.Get(ctx, key, sec); err != nil {
+		if k8s_errors.IsNotFound(err) {
+			log.Info("AC Secret not found, requeueing", "secret", key)
+			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+		}
+		log.Error(err, "Failed to fetch AC Secret", "secret", key)
+		return ctrl.Result{}, err
+	}
+
+	hash, res, err := secret.VerifySecret(
+		ctx,
+		key,
+		[]string{"AC_ID", "AC_SECRET"},
+		r.Client,
+		10*time.Second,
+	)
+	if err != nil {
+		log.Error(err, "Failed to verify AC Secret", "secret", key)
+		return ctrl.Result{}, err
+	}
+	if res.RequeueAfter > 0 {
+		return res, nil
+	}
+
+	(*configVars)["secret-"+secretName] = env.SetValue(hash)
+	return ctrl.Result{}, nil
 }

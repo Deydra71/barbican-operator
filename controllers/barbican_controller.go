@@ -589,7 +589,7 @@ var (
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *BarbicanReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).
+	cBuilder := ctrl.NewControllerManagedBy(mgr).
 		For(&barbicanv1beta1.Barbican{}).
 		Owns(&barbicanv1beta1.BarbicanAPI{}).
 		Owns(&barbicanv1beta1.BarbicanWorker{}).
@@ -606,8 +606,12 @@ func (r *BarbicanReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&rbacv1.RoleBinding{}).
 		Watches(&keystonev1.KeystoneAPI{},
 			handler.EnqueueRequestsFromMapFunc(r.findObjectForSrc),
-			builder.WithPredicates(keystonev1.KeystoneAPIStatusChangedPredicate)).
-		Complete(r)
+			builder.WithPredicates(keystonev1.KeystoneAPIStatusChangedPredicate))
+
+	// Add keystone-overrides secret watcher for SKMO support
+	cBuilder = AddKeystoneOverridesWatches(cBuilder)
+
+	return cBuilder.Complete(r)
 }
 
 func (r *BarbicanReconciler) findObjectForSrc(ctx context.Context, src client.Object) []reconcile.Request {
@@ -687,6 +691,27 @@ func (r *BarbicanReconciler) generateServiceConfig(
 		return err
 	}
 
+	// Check for keystone overrides for SKMO deployments
+	keystoneOverrides, _, err := oko_secret.GetKeystoneOverrides(ctx, h, instance.Namespace)
+	if err != nil {
+		return err
+	}
+
+	// Use keystone overrides if available, otherwise use local keystone discovery
+	var finalKeystoneAuthURL string
+	var finalWWWAuthenticateURI string
+	var finalRegion string
+
+	if keystoneOverrides != nil && keystoneOverrides.AuthURL != "" {
+		finalKeystoneAuthURL = keystoneOverrides.AuthURL
+		finalWWWAuthenticateURI = keystoneOverrides.WWWAuthenticateURI
+		finalRegion = keystoneOverrides.Region
+	} else {
+		finalKeystoneAuthURL = keystoneInternalURL
+		// finalWWWAuthenticateURI remains empty for local keystone
+		// finalRegion remains empty for local keystone
+	}
+
 	databaseAccount := db.GetAccount()
 	databaseSecret := db.GetSecret()
 
@@ -697,12 +722,22 @@ func (r *BarbicanReconciler) generateServiceConfig(
 			instance.Status.DatabaseHostname,
 			barbican.DatabaseName,
 		),
-		"KeystoneAuthURL":  keystoneInternalURL,
+		"KeystoneAuthURL":  finalKeystoneAuthURL,
 		"ServicePassword":  string(ospSecret.Data[instance.Spec.PasswordSelectors.Service]),
 		"ServiceUser":      instance.Spec.ServiceUser,
 		"TransportURL":     string(transportURLSecret.Data["transport_url"]),
 		"LogFile":          fmt.Sprintf("%s%s.log", barbican.BarbicanLogPath, instance.Name),
 		"EnableSecureRBAC": instance.Spec.BarbicanAPI.EnableSecureRBAC,
+	}
+
+	// Add www_authenticate_uri if provided in overrides
+	if finalWWWAuthenticateURI != "" {
+		templateParameters["WWWAuthenticateURI"] = finalWWWAuthenticateURI
+	}
+
+	// Add region if provided in overrides
+	if finalRegion != "" {
+		templateParameters["Region"] = finalRegion
 	}
 
 	// To avoid a json parsing error in kolla files, we always need to set PKCS11ClientDataPath

@@ -1016,6 +1016,7 @@ func (r *BarbicanAPIReconciler) findObjectsForSrc(ctx context.Context, src clien
 
 	Log := r.GetLogger(ctx)
 
+	// Handle existing field-based secret watching
 	for _, field := range apiWatchFields {
 		crList := &barbicanv1beta1.BarbicanAPIList{}
 		listOps := &client.ListOptions{

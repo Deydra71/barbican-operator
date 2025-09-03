@@ -29,8 +29,14 @@ import (
 	"github.com/openstack-k8s-operators/lib-common/modules/common/helper"
 	"github.com/openstack-k8s-operators/lib-common/modules/common/secret"
 	"github.com/openstack-k8s-operators/lib-common/modules/common/util"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
 type conditionUpdater interface {
@@ -145,4 +151,36 @@ func GenerateSecretStoreTemplateMap(
 		"PKCS11CryptoEnabled":      slices.Contains(stores, "pkcs11"),
 	}
 	return tempMap, nil
+}
+
+// AddKeystoneOverridesWatches adds keystone-overrides secret watch to the passed controller builder
+func AddKeystoneOverridesWatches(b *builder.Builder) *builder.Builder {
+	keystoneOverridesMap := handler.MapFunc(func(_ context.Context, obj client.Object) []reconcile.Request {
+		name := obj.GetName()
+		ns := obj.GetNamespace()
+
+		// Only watch for secrets named "keystone-overrides"
+		if name != "keystone-overrides" {
+			return nil
+		}
+
+		// Only handle Secret objects
+		if _, isSecret := obj.(*corev1.Secret); !isSecret {
+			return nil
+		}
+
+		// Reconcile all Barbican instances when keystone-overrides secret changes
+		return []reconcile.Request{
+			{NamespacedName: types.NamespacedName{Namespace: ns, Name: "barbican"}},
+		}
+	})
+
+	// Watch the keystone-overrides secret
+	b = b.Watches(
+		&corev1.Secret{},
+		handler.EnqueueRequestsFromMapFunc(keystoneOverridesMap),
+		builder.WithPredicates(predicate.ResourceVersionChangedPredicate{}),
+	)
+
+	return b
 }

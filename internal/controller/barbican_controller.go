@@ -391,6 +391,11 @@ func (r *BarbicanReconciler) reconcileNormal(ctx context.Context, instance *barb
 
 	instance.Status.Conditions.MarkTrue(condition.ServiceConfigReadyCondition, condition.ServiceConfigReadyMessage)
 
+	// Manage consumer finalizer, the AC data was already read and rendered to the service config secret
+	if err := r.manageACSecretFinalizer(ctx, helper, instance); err != nil {
+		return ctrl.Result{}, err
+	}
+
 	// networks to attach to
 	nadList := []networkv1.NetworkAttachmentDefinition{}
 	for _, netAtt := range instance.Spec.BarbicanAPI.NetworkAttachments {
@@ -611,11 +616,87 @@ func (r *BarbicanReconciler) reconcileDelete(ctx context.Context, instance *barb
 		}
 	}
 
+	// Remove consumer finalizer from the AC secret barbican was consuming.
+	if instance.Status.ApplicationCredentialSecret != "" {
+		acSecret := &corev1.Secret{}
+		acKey := types.NamespacedName{
+			Name:      instance.Status.ApplicationCredentialSecret,
+			Namespace: instance.Namespace,
+		}
+		if err := r.Get(ctx, acKey, acSecret); err != nil {
+			if !k8s_errors.IsNotFound(err) {
+				return ctrl.Result{}, err
+			}
+			Log.Info("AC secret already deleted, skipping consumer finalizer removal",
+				"secret", instance.Status.ApplicationCredentialSecret)
+		} else if controllerutil.RemoveFinalizer(acSecret, barbican.ACConsumerFinalizer) {
+			if err := r.Update(ctx, acSecret); err != nil {
+				return ctrl.Result{}, err
+			}
+			Log.Info("Removed consumer finalizer from AC secret",
+				"secret", instance.Status.ApplicationCredentialSecret)
+		}
+	}
+
 	// Service is deleted so remove the finalizer.
 	controllerutil.RemoveFinalizer(instance, helper.GetFinalizer())
 	Log.Info(fmt.Sprintf("Reconciled Service '%s' delete successfully", instance.Name))
 
 	return ctrl.Result{}, nil
+}
+
+// TODO: SHould the manageACSecretFinalizer function go to lib-common ?
+// manageACSecretFinalizer ensures barbican's consumer finalizer is present on
+// the AC secret it is currently consuming and absent from any previously-used
+// AC secret. Status.ApplicationCredentialSecret tracks which secret currently
+// carries the finalizer.
+func (r *BarbicanReconciler) manageACSecretFinalizer(
+	ctx context.Context,
+	h *helper.Helper,
+	instance *barbicanv1beta1.Barbican,
+) error {
+	Log := r.GetLogger(ctx)
+
+	newSecretName := instance.Spec.Auth.ApplicationCredentialSecret
+	oldSecretName := instance.Status.ApplicationCredentialSecret
+
+	if newSecretName == oldSecretName {
+		return nil
+	}
+
+	// Add consumer finalizer to the new AC secret.
+	if newSecretName != "" {
+		secret := &corev1.Secret{}
+		key := types.NamespacedName{Name: newSecretName, Namespace: instance.Namespace}
+		if err := h.GetClient().Get(ctx, key, secret); err != nil {
+			return fmt.Errorf("failed to get new AC secret %s: %w", newSecretName, err)
+		}
+		if controllerutil.AddFinalizer(secret, barbican.ACConsumerFinalizer) {
+			if err := h.GetClient().Update(ctx, secret); err != nil {
+				return fmt.Errorf("failed to add consumer finalizer to AC secret %s: %w", newSecretName, err)
+			}
+			Log.Info("Added consumer finalizer to AC secret", "secret", newSecretName)
+		}
+	}
+
+	// Remove consumer finalizer from the old AC secret.
+	if oldSecretName != "" {
+		secret := &corev1.Secret{}
+		key := types.NamespacedName{Name: oldSecretName, Namespace: instance.Namespace}
+		if err := h.GetClient().Get(ctx, key, secret); err != nil {
+			if !k8s_errors.IsNotFound(err) {
+				return fmt.Errorf("failed to get old AC secret %s: %w", oldSecretName, err)
+			}
+		} else if controllerutil.RemoveFinalizer(secret, barbican.ACConsumerFinalizer) {
+			if err := h.GetClient().Update(ctx, secret); err != nil {
+				return fmt.Errorf("failed to remove consumer finalizer from old AC secret %s: %w", oldSecretName, err)
+			}
+			Log.Info("Removed consumer finalizer from old AC secret", "secret", oldSecretName)
+		}
+	}
+
+	instance.Status.ApplicationCredentialSecret = newSecretName
+	return nil
 }
 
 // fields to index to reconcile when change
